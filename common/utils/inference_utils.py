@@ -2,7 +2,11 @@ import os
 import os.path as osp
 import gc
 
-from modules.layerdiffuse.diffusers_kdiffusion_sdxl import KDiffusionStableDiffusionXLPipeline, UNetFrameConditionModel
+from modules.layerdiffuse.diffusers_kdiffusion_sdxl import (
+    KDiffusionStableDiffusionXLPipeline,
+    UNetFrameConditionModel,
+    load_layerdiff_scheduler,
+)
 from modules.layerdiffuse.vae import TransparentVAE
 from modules.layerdiffuse.layerdiff3d import UNetFrameConditionModel
 from modules.marigold import MarigoldDepthPipeline
@@ -38,10 +42,11 @@ def apply_layerdiff(
         else:
             print(f'load unet from {unet_ckpt}')
             unet = UNetFrameConditionModel.from_pretrained(unet_ckpt)
+        scheduler = load_layerdiff_scheduler(pretrained)
         layerdiff_pipeline = KDiffusionStableDiffusionXLPipeline.from_pretrained(
             pretrained,
             trans_vae=trans_vae, unet=unet,
-            scheduler=None
+            scheduler=scheduler
         )
 
         if vae_ckpt is not None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -44,6 +45,10 @@ def test_model_lock_contains_exact_revisions() -> None:
     assert lock["bundles"]["nf4"]["repositories"]["depth"]["revision"] == (
         "aad13aafa9f3c72defb40a9d9225cec70b0eab16"
     )
+    for bundle in lock["bundles"].values():
+        required = bundle["repositories"]["layerdiff"]["required_files"]
+        assert "model_index.json" in required
+        assert "scheduler/scheduler_config.json" in required
 
 
 @pytest.mark.asyncio
@@ -56,6 +61,11 @@ async def test_prefetch_uses_pinned_revisions_and_reuses_completed_paths(
         calls.append((repo_id, revision))
         destination = cache / revision
         destination.mkdir(parents=True, exist_ok=True)
+        (destination / "model_index.json").write_text("{}\n", encoding="utf-8")
+        if "layerdiff" in repo_id:
+            scheduler = destination / "scheduler/scheduler_config.json"
+            scheduler.parent.mkdir(parents=True, exist_ok=True)
+            scheduler.write_text("{}\n", encoding="utf-8")
         return str(destination)
 
     manager = ModelManager(
@@ -67,6 +77,42 @@ async def test_prefetch_uses_pinned_revisions_and_reuses_completed_paths(
     assert first == second
     assert len(calls) == 2
     assert calls[0][1] == "39b9881340189810bebabe5462756fb2e8fbd5fa"
+
+    layerdiff = Path(first["layerdiff"])
+    (layerdiff / "scheduler/scheduler_config.json").unlink()
+    third = await manager.ensure_bundle("nf4")
+    assert third == first
+    assert len(calls) == 4
+
+
+def test_layerdiff_scheduler_has_no_hidden_repository_dependency() -> None:
+    root = Path(__file__).parents[2]
+    pipeline = (
+        root / "common/modules/layerdiffuse/diffusers_kdiffusion_sdxl.py"
+    ).read_text(encoding="utf-8")
+    callers = [
+        root / "common/utils/inference_utils.py",
+        root / "inference/scripts/inference_psd_quantized.py",
+        root / "inference/scripts/inference_psd_blockswap.py",
+    ]
+
+    assert "frankjoshua/juggernautXL_version6Rundiffusion" not in pipeline
+    assert "load_layerdiff_scheduler" in pipeline
+    for caller in callers:
+        source = caller.read_text(encoding="utf-8")
+        assert "load_layerdiff_scheduler" in source
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if getattr(node.func, "attr", None) != "from_pretrained":
+                continue
+            assert not any(
+                keyword.arg == "scheduler"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is None
+                for keyword in node.keywords
+            )
 
 
 @pytest.mark.parametrize(

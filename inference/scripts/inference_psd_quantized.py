@@ -26,7 +26,10 @@ import numpy as np
 import torch
 from PIL import Image
 
-from modules.layerdiffuse.diffusers_kdiffusion_sdxl import KDiffusionStableDiffusionXLPipeline
+from modules.layerdiffuse.diffusers_kdiffusion_sdxl import (
+    KDiffusionStableDiffusionXLPipeline,
+    load_layerdiff_scheduler,
+)
 from modules.layerdiffuse.vae import TransparentVAE
 from modules.layerdiffuse.layerdiff3d import UNetFrameConditionModel
 from modules.marigold import MarigoldDepthPipeline
@@ -47,14 +50,15 @@ VALID_BODY_PARTS_V2 = [
 def build_layerdiff_pipeline(args):
     """Build the LayerDiff3D pipeline with appropriate quantization."""
     quant_mode = args.quant_mode
+    repo = args.repo_id_layerdiff
+    scheduler = load_layerdiff_scheduler(repo)
 
     if quant_mode == 'none':
         # bf16 baseline: load from original repo
-        repo = args.repo_id_layerdiff
         trans_vae = TransparentVAE.from_pretrained(repo, subfolder='trans_vae')
         unet = UNetFrameConditionModel.from_pretrained(repo, subfolder='unet')
         pipeline = KDiffusionStableDiffusionXLPipeline.from_pretrained(
-            repo, trans_vae=trans_vae, unet=unet, scheduler=None)
+            repo, trans_vae=trans_vae, unet=unet, scheduler=scheduler)
         if args.cpu_offload:
             pipeline.vae.to(dtype=torch.bfloat16)
             pipeline.trans_vae.to(dtype=torch.bfloat16)
@@ -74,12 +78,11 @@ def build_layerdiff_pipeline(args):
         pipeline.cache_tag_embeds()
     else:
         # NF4: load from pre-quantized repo (auto-selected by REPO_MAP)
-        repo = args.repo_id_layerdiff
         unet = UNetFrameConditionModel.from_pretrained(repo, subfolder='unet')
 
         trans_vae = TransparentVAE.from_pretrained(repo, subfolder='trans_vae')  # always bf16
         pipeline = KDiffusionStableDiffusionXLPipeline.from_pretrained(
-            repo, trans_vae=trans_vae, unet=unet, scheduler=None)
+            repo, trans_vae=trans_vae, unet=unet, scheduler=scheduler)
 
         if args.cpu_offload:
             # VAE + TransparentVAE to bf16; quantized components handled by bnb

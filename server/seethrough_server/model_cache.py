@@ -146,6 +146,15 @@ class ModelManager:
                         repository["revision"],
                         self.settings.model_cache,
                     )
+                    missing = self._missing_required_files(
+                        Path(downloaded[role]),
+                        repository,
+                    )
+                    if missing:
+                        names = ", ".join(missing)
+                        raise RuntimeError(
+                            f"Downloaded {role} snapshot is incomplete; missing: {names}"
+                        )
                 self._set_runtime(bundle, "ready", None, paths=downloaded)
                 if notify:
                     await notify({"type": "models", "bundle": bundle, "state": "ready"})
@@ -167,17 +176,36 @@ class ModelManager:
             if bundle not in self._runtime or value.get("state") != "ready":
                 continue
             paths = value.get("paths", {})
-            if paths and all(Path(path).is_dir() for path in paths.values()):
+            if self._paths_are_complete(bundle, paths):
                 self._runtime[bundle] = value
 
     def _complete_paths(self, bundle: str) -> dict[str, str] | None:
         value = self._runtime[bundle]
         paths = value.get("paths", {})
-        if value.get("state") == "ready" and paths and all(
-            Path(path).is_dir() for path in paths.values()
-        ):
+        if value.get("state") == "ready" and self._paths_are_complete(bundle, paths):
             return dict(paths)
         return None
+
+    def _paths_are_complete(self, bundle: str, paths: dict[str, str]) -> bool:
+        repositories = self.lock_manifest["bundles"][bundle]["repositories"]
+        if not isinstance(paths, dict) or not paths or set(paths) != set(repositories):
+            return False
+        return all(
+            Path(paths[role]).is_dir()
+            and not self._missing_required_files(Path(paths[role]), repository)
+            for role, repository in repositories.items()
+        )
+
+    @staticmethod
+    def _missing_required_files(
+        snapshot: Path,
+        repository: dict[str, Any],
+    ) -> list[str]:
+        return [
+            relative
+            for relative in repository.get("required_files", [])
+            if not (snapshot / relative).is_file()
+        ]
 
     def _set_runtime(
         self,

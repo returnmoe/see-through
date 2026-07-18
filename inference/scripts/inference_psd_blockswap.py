@@ -13,7 +13,11 @@ from diffusers.utils.torch_utils import randn_tensor
 from modules.layerdiffuse.vae import vae_encode, TransparentVAE
 from modules.layerdiffuse.layerdiff3d import UNetFrameConditionModel
 from utils.torch_utils import img2tensor
-from modules.layerdiffuse.diffusers_kdiffusion_sdxl import KDiffusionStableDiffusionXLPipeline, LayerdiffPipelineOutput
+from modules.layerdiffuse.diffusers_kdiffusion_sdxl import (
+    KDiffusionStableDiffusionXLPipeline,
+    LayerdiffPipelineOutput,
+    load_layerdiff_scheduler,
+)
 from inference_psd_quantized import build_marigold_pipeline, run_layerdiff, run_marigold
 from utils.inference_utils import further_extr
 
@@ -394,8 +398,12 @@ if __name__ == '__main__':
     print(f"Building Blockswap pipeline (repo: {args.repo_id_layerdiff})...")
     trans_vae = TransparentVAE.from_pretrained(args.repo_id_layerdiff, subfolder='trans_vae')
     unet = UNetFrameConditionModel.from_pretrained(args.repo_id_layerdiff, subfolder='unet')
+    scheduler = load_layerdiff_scheduler(args.repo_id_layerdiff)
     pipeline = KDiffusionStableDiffusionXLPipelineBlockSwap.from_pretrained(
-        args.repo_id_layerdiff, trans_vae=trans_vae, unet=unet, scheduler=None
+        args.repo_id_layerdiff,
+        trans_vae=trans_vae,
+        unet=unet,
+        scheduler=scheduler,
     )
     pipeline.set_progress_bar_config(disable=args.disable_progressbar)
     pipeline.enable_blockswap(device='cuda')

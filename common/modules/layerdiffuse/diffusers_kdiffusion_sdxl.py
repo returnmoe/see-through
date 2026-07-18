@@ -6,12 +6,21 @@ import numpy as np
 from tqdm.auto import trange
 from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl_img2img import *
 from diffusers import StableDiffusionXLPipeline, StableDiffusionPipeline
-from diffusers import DPMSolverMultistepScheduler, DPMSolverSinglestepScheduler, EulerDiscreteScheduler
+from diffusers import DPMSolverMultistepScheduler
 from diffusers.utils.outputs import BaseOutput
 
 from modules.layerdiffuse.vae import TransparentVAEDecoder, TransparentVAEEncoder, vae_encode
 from .layerdiff3d import UNetFrameConditionModel
 from utils.torch_utils import seed_everything, img2tensor, tensor2img
+
+
+def load_layerdiff_scheduler(pretrained):
+    """Load the scheduler shipped with the selected LayerDiffuse snapshot."""
+    return DPMSolverMultistepScheduler.from_pretrained(
+        pretrained,
+        subfolder="scheduler",
+    )
+
 
 @dataclass
 class LayerdiffPipelineOutput(BaseOutput):
@@ -81,49 +90,8 @@ class KDiffusionStableDiffusionXLPipeline(StableDiffusionXLImg2ImgPipeline):
         ):
 
         if scheduler is None:
-            config_min = {"final_sigmas_type":"sigma_min"}
-            config_min_euler = {"final_sigmas_type":"sigma_min", "euler_at_final": True }
-            config_zero = {"final_sigmas_type":"zero"}
-            schedulers = {
-                "DPMPP_2M": {
-                    "min": (DPMSolverMultistepScheduler, config_min),
-                    "min_euler": (DPMSolverMultistepScheduler, config_min_euler),
-                    "zero": (DPMSolverMultistepScheduler, config_zero),
-                },
-                "DPMPP_2M_K": {
-                    "min": (DPMSolverMultistepScheduler, {"use_karras_sigmas": True, **config_min}),
-                    "min_euler": (DPMSolverMultistepScheduler, {"use_karras_sigmas": True, **config_min_euler}),
-                    "zero": (DPMSolverMultistepScheduler, {"use_karras_sigmas": True, **config_zero}),
-                },
-                "DPMPP_2M_SDE": {
-                    "min": (DPMSolverMultistepScheduler, {"algorithm_type": "sde-dpmsolver++", **config_min}),
-                    "min_euler": (DPMSolverMultistepScheduler, {"algorithm_type": "sde-dpmsolver++", **config_min_euler}),
-                    "zero": (DPMSolverMultistepScheduler, {"algorithm_type": "sde-dpmsolver++", **config_zero}),
-                },
-                "DPMPP_2M_SDE_K": {
-                    "min": (DPMSolverMultistepScheduler, {"algorithm_type": "sde-dpmsolver++", "use_karras_sigmas": True, **config_min}),
-                    "min_euler": (DPMSolverMultistepScheduler, {"algorithm_type": "sde-dpmsolver++", "use_karras_sigmas": True, **config_min_euler}),
-                    "zero": (DPMSolverMultistepScheduler, {"use_karras_sigmas": True, "algorithm_type": "sde-dpmsolver++", **config_zero}),
-                },
-                "DPMPP": {
-                    "min": (DPMSolverSinglestepScheduler, config_min),
-                    "min_euler": (DPMSolverSinglestepScheduler, config_min_euler),
-                    "zero": (DPMSolverSinglestepScheduler, config_zero),
-                },
-                "DPMPP_K": {
-                    "min": (DPMSolverSinglestepScheduler, {"use_karras_sigmas": True, **config_min}),
-                    "min_euler": (DPMSolverSinglestepScheduler, {"use_karras_sigmas": True, **config_min_euler}),
-                    "zero": (DPMSolverSinglestepScheduler, {"use_karras_sigmas": True, **config_zero}),
-                },
-            }
-            model_id = "frankjoshua/juggernautXL_version6Rundiffusion"
-            scheduler_name = "DPMPP_2M_SDE"
-            scheduler_config_name = "zero"
-            scheduler_configs = schedulers[scheduler_name]
-            scheduler = scheduler_configs[scheduler_config_name][0].from_pretrained(
-                    model_id,
-                    subfolder="scheduler",
-                    **scheduler_configs[scheduler_config_name][1],
+            raise ValueError(
+                "scheduler must be loaded from the selected LayerDiffuse snapshot"
             )
 
         super().__init__(

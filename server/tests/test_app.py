@@ -79,6 +79,11 @@ def make_app(tmp_path: Path, host: str = "127.0.0.1"):
     def download(repo_id: str, revision: str, cache: Path) -> str:
         path = cache / revision
         path.mkdir(parents=True, exist_ok=True)
+        (path / "model_index.json").write_text("{}\n", encoding="utf-8")
+        if "layerdiff" in repo_id:
+            scheduler = path / "scheduler/scheduler_config.json"
+            scheduler.parent.mkdir(parents=True, exist_ok=True)
+            scheduler.write_text("{}\n", encoding="utf-8")
         return str(path)
 
     async def process_factory(*args, **kwargs):
