@@ -110,8 +110,11 @@ jobs:
           outputs: type=image,push=true,compression=gzip,compression-level=6,force-compression=true,oci-mediatypes=false
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
-          provenance: mode=max
-          sbom: true
+          # Inline BuildKit attestations require OCI media types. The RunPod
+          # deployment stays Docker schema 2/gzip; provenance is attached by
+          # the next step and the image is inventoried/scanned by Trivy.
+          provenance: false
+          sbom: false
       - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         if: steps.existing.outputs.digest == ''
         with:
