@@ -1,0 +1,72 @@
+name: Release image
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-image
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/returnmoe/see-through
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Validate stable tag and master ancestry
+        id: version
+        shell: bash
+        run: |
+          tag="$GITHUB_REF_NAME"
+          [[ "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]
+          version="${tag#v}"
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          commit="$(git rev-list -n1 "$tag")"
+          git fetch origin master --no-tags
+          git merge-base --is-ancestor "$commit" origin/master
+          printf 'version=%s\nmajor=%s\nminor=%s\ncommit=%s\n' "$version" "$major" "$minor" "$commit" >>"$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - id: image
+        run: |
+          digest="$(docker buildx imagetools inspect "$IMAGE:sha-${{ steps.version.outputs.commit }}" | sed -n 's/^Digest:[[:space:]]*//p' | head -n1)"
+          [[ -n "$digest" ]]
+          printf 'digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
+      - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish immutable semantic version
+        run: bash scripts/container/promote-image.sh "$IMAGE" '${{ steps.image.outputs.digest }}' immutable '${{ steps.version.outputs.version }}'
+      - name: Reconcile stable aliases without downgrading them
+        shell: bash
+        run: |
+          current="$GITHUB_REF_NAME"
+          major='${{ steps.version.outputs.major }}'
+          minor='${{ steps.version.outputs.minor }}'
+          mapfile -t stable_tags < <(git tag --list 'v*' | while read -r tag; do [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && echo "$tag"; done | sort -V)
+          latest="${stable_tags[-1]}"
+          latest_minor="$(printf '%s\n' "${stable_tags[@]}" | grep -E "^v${major}\\.${minor}\\.[0-9]+$" | tail -n1)"
+          latest_major="$(printf '%s\n' "${stable_tags[@]}" | grep -E "^v${major}\\.[0-9]+\\.[0-9]+$" | tail -n1)"
+          if [[ "$current" == "$latest_minor" ]]; then
+            bash scripts/container/promote-image.sh "$IMAGE" '${{ steps.image.outputs.digest }}' moving "${major}.${minor}"
+          fi
+          if [[ "$current" == "$latest_major" ]]; then
+            bash scripts/container/promote-image.sh "$IMAGE" '${{ steps.image.outputs.digest }}' moving "$major"
+          fi
+          if [[ "$current" == "$latest" ]]; then
+            bash scripts/container/promote-image.sh "$IMAGE" '${{ steps.image.outputs.digest }}' moving latest
+          fi
