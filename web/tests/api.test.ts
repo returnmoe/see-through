@@ -76,23 +76,30 @@ describe('runtime API client', () => {
       }),
     );
     vi.stubGlobal('fetch', fetchMock);
-    const file = new File(['image'], 'source.png', { type: 'image/png' });
+    const sourceBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+    const file = new File([sourceBytes], 'source.png', { type: 'image/png' });
     await createJob(file, {
       profile: 'nf4',
       resolution: 2048,
       seed: 1234,
       steps: 42,
       depth_resolution: 1024,
+      tblr_split: true,
     });
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = init.body as FormData;
     expect(init.method).toBe('POST');
-    expect(body.get('file')).toBeInstanceOf(File);
+    const uploadedFile = body.get('file');
+    expect(uploadedFile).toBeInstanceOf(File);
+    expect((uploadedFile as File).name).toBe('source.png');
+    expect((uploadedFile as File).size).toBe(sourceBytes.byteLength);
+    expect(new Uint8Array(await (uploadedFile as File).arrayBuffer())).toEqual(sourceBytes);
     expect(body.get('profile')).toBe('nf4');
     expect(body.get('resolution')).toBe('2048');
     expect(body.get('seed')).toBe('1234');
     expect(body.get('steps')).toBe('42');
     expect(body.get('depth_resolution')).toBe('1024');
+    expect(body.get('tblr_split')).toBe('true');
   });
 
   it('uses the client header for JSON mutations and encoded job IDs', async () => {

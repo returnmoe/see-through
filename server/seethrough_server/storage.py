@@ -91,6 +91,7 @@ class JobStore:
         seed: int = 42,
         steps: int = 30,
         depth_resolution: int = 768,
+        tblr_split: bool = False,
     ) -> dict[str, Any]:
         job_id = str(uuid.uuid4())
         now = utc_now()
@@ -120,6 +121,7 @@ class JobStore:
             "seed": seed,
             "steps": steps,
             "depth_resolution": depth_resolution,
+            "tblr_split": tblr_split,
             "error": None,
             "cancel_requested": False,
             "artifacts": [],
@@ -173,6 +175,7 @@ class JobStore:
         value.setdefault("seed", 42)
         value.setdefault("steps", 30)
         value.setdefault("depth_resolution", 768)
+        value.setdefault("tblr_split", False)
         log_path = self.jobs_dir / record["id"] / "job.log"
         log_tail = self._tail(log_path)
         value["log_tail"] = log_tail
@@ -186,6 +189,7 @@ class JobStore:
             "seed": record.get("seed", 42),
             "steps": record.get("steps", 30),
             "depth_resolution": record.get("depth_resolution", 768),
+            "tblr_split": record.get("tblr_split", False),
         }
         public_artifacts = []
         for artifact in value.get("artifacts", []):

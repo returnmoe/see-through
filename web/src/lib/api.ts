@@ -60,6 +60,7 @@ export function normalizeJob(job: ApiJob): Job {
       seed: job.config?.seed ?? job.seed ?? 42,
       steps: job.config?.steps ?? job.steps ?? 30,
       depth_resolution: job.config?.depth_resolution ?? job.depth_resolution ?? 768,
+      tblr_split: job.config?.tblr_split ?? job.tblr_split ?? false,
       ...job.config,
     },
     artifacts,
@@ -84,6 +85,7 @@ export async function createJob(file: File, options: JobOptions): Promise<Job> {
   body.append('seed', String(options.seed));
   body.append('steps', String(options.steps));
   body.append('depth_resolution', String(options.depth_resolution));
+  body.append('tblr_split', String(options.tblr_split));
   return normalizeJob(await request<ApiJob>('/api/jobs', { method: 'POST', body }));
 }
 

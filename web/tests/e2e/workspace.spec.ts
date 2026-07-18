@@ -10,6 +10,22 @@ const system = {
 
 let createFailure: { status: number; detail: string } | null;
 
+function bmpImage(width: number, height: number): Buffer {
+  const rowBytes = Math.ceil((width * 3) / 4) * 4;
+  const pixelBytes = rowBytes * height;
+  const buffer = Buffer.alloc(54 + pixelBytes);
+  buffer.write('BM', 0, 'ascii');
+  buffer.writeUInt32LE(buffer.length, 2);
+  buffer.writeUInt32LE(54, 10);
+  buffer.writeUInt32LE(40, 14);
+  buffer.writeInt32LE(width, 18);
+  buffer.writeInt32LE(height, 22);
+  buffer.writeUInt16LE(1, 26);
+  buffer.writeUInt16LE(24, 28);
+  buffer.writeUInt32LE(pixelBytes, 34);
+  return buffer;
+}
+
 test.beforeEach(async ({ page }) => {
   createFailure = null;
   await page.route('**/api/system', (route) => route.fulfill({ json: system }));
@@ -63,13 +79,22 @@ test('keeps all three panels aligned and uses internal Jobs scrolling on short m
           input_name: 'layered.png',
           progress: 1,
           logs: Array.from({ length: 30 }, (_, index) => `Completed stage ${index + 1}`),
-          artifacts: Array.from({ length: 10 }, (_, index) => ({
-            id: `artifact-${index}`,
-            name: `layer-${index}.json`,
-            label: `Layer metadata ${index}`,
-            kind: 'metadata',
-            size: 1024 + index,
-          })),
+          artifacts: [
+            ...Array.from({ length: 10 }, (_, index) => ({
+              id: `artifact-${index}`,
+              name: `layer-${index}.json`,
+              label: `Layer metadata ${index}`,
+              kind: 'metadata',
+              size: 1024 + index,
+            })),
+            {
+              id: 'artifact-archive',
+              name: 'artifacts.zip',
+              label: 'Artifact archive',
+              kind: 'archive',
+              size: 16 * 1024,
+            },
+          ],
         },
         {
           id: 'failed-job',
@@ -109,6 +134,20 @@ test('keeps all three panels aligned and uses internal Jobs scrolling on short m
   const jobsHeader = await jobs.locator('.panel-title').boundingBox();
   expect(jobsHeader?.height).toBe(sourceHeader?.height);
   await expect(jobs.locator('.panel-title p')).toHaveText('Queue, progress, and artifacts');
+  const artifactsSection = jobs.locator('.artifacts');
+  const downloadAll = artifactsSection.getByRole('link', { name: /Download all/ });
+  await expect(downloadAll).toBeVisible();
+  await expect(downloadAll).toHaveAttribute(
+    'href',
+    '/api/jobs/completed-job/artifacts/artifact-archive',
+  );
+  await expect(
+    artifactsSection.getByRole('link', { name: /Layer metadata 0/ }),
+  ).not.toBeVisible();
+  await artifactsSection.getByText('Download individual files').click();
+  await expect(
+    artifactsSection.getByRole('link', { name: /Layer metadata 0/ }),
+  ).toBeVisible();
 
   const recipeBottom = await configure
     .locator('.recipe-settings')
@@ -188,8 +227,20 @@ test('submits an image with the selected controls', async ({ page }) => {
   await page.locator('input[name="seed"]').fill('123456');
   await page.locator('input[name="steps"]').fill('40');
   await page.locator('input[name="depth_resolution"]').fill('1024');
+  const splitLimbs = page.getByRole('checkbox', { name: /Split left\/right arms & legs/ });
+  await expect(splitLimbs).not.toBeChecked();
+  await splitLimbs.check();
+  await expect(splitLimbs).toBeChecked();
+  const sourcePreview = page.locator('.upload-panel img[alt="Selected source preview"]');
+  const previewUrl = await sourcePreview.getAttribute('src');
   await page.getByRole('button', { name: 'Start decomposition' }).click();
-  await expect(page.getByText('entered the queue')).toBeVisible();
+  const queueToast = page.locator('.toast[data-tone="success"]');
+  await expect(queueToast).toBeVisible();
+  await expect(queueToast).toContainText('Run queued');
+  await expect(queueToast).toContainText('entered the queue');
+  await expect(page.locator('.workspace-content > .message.notice')).toHaveCount(0);
+  await expect(sourcePreview).toHaveAttribute('src', previewUrl ?? '');
+  await expect(page.locator('.upload-panel .file-overlay')).toContainText('sample.png');
   const selectedJob = page.getByRole('button', { name: 'Selected job' });
   await expect(selectedJob).toContainText('sample.png');
   await expect(selectedJob).toContainText('queued');
@@ -200,6 +251,46 @@ test('submits an image with the selected controls', async ({ page }) => {
     ),
   );
   expect(Math.abs(panelHeights[0] - panelHeights[1])).toBeLessThan(1);
+});
+
+test('contains a high-resolution source preview without changing the upload panel size', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+
+  const uploadPanel = page.locator('.upload-panel');
+  const dropZone = page.locator('.drop-zone');
+  const beforePanel = await uploadPanel.boundingBox();
+  const beforeDropZone = await dropZone.boundingBox();
+
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'tall-source.bmp',
+    mimeType: 'image/bmp',
+    buffer: bmpImage(64, 4096),
+  });
+
+  const preview = dropZone.getByRole('img', { name: 'Selected source preview' });
+  await expect(preview).toBeVisible();
+  await expect
+    .poll(() =>
+      preview.evaluate((image: HTMLImageElement) => ({
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+      })),
+    )
+    .toEqual({ width: 64, height: 4096 });
+
+  const afterPanel = await uploadPanel.boundingBox();
+  const afterDropZone = await dropZone.boundingBox();
+  expect(Math.abs((afterPanel?.height ?? 0) - (beforePanel?.height ?? 0))).toBeLessThan(1);
+  expect(Math.abs((afterDropZone?.height ?? 0) - (beforeDropZone?.height ?? 0))).toBeLessThan(1);
+  expect(
+    await preview.evaluate((image) => ({
+      objectFit: getComputedStyle(image).objectFit,
+      position: getComputedStyle(image).position,
+    })),
+  ).toEqual({ objectFit: 'contain', position: 'absolute' });
 });
 
 test('shows a failed submission as a dismissible top-right toast, not a job', async ({ page }) => {

@@ -4,6 +4,7 @@ import asyncio
 import json
 import mimetypes
 import os
+import re
 import signal
 import sys
 import uuid
@@ -30,6 +31,9 @@ DEFAULT_DEPTH_RESOLUTION = 768
 MIN_DEPTH_RESOLUTION = 256
 MAX_DEPTH_RESOLUTION = 2048
 DEPTH_RESOLUTION_STEP = 64
+INFERENCE_HEARTBEAT_SECONDS = 30.0
+
+ANSI_ESCAPE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 PHASE_MARKERS = (
     ("building layerdiff", "loading_layerdiff", 15),
@@ -95,6 +99,8 @@ def build_inference_command(
         str(depth_resolution),
         "--save_to_psd",
     ]
+    if record.get("tblr_split", False):
+        common.append("--tblr_split")
     if profile in {"bf16", "group-offload"}:
         command = [
             sys.executable,
@@ -151,12 +157,14 @@ class JobManager:
         *,
         gpu_probe: GPUProbe | None = None,
         process_factory: Any = None,
+        heartbeat_interval: float = INFERENCE_HEARTBEAT_SECONDS,
     ) -> None:
         self.settings = settings
         self.store = store
         self.models = models
         self.gpu_probe = gpu_probe or GPUProbe()
         self.process_factory = process_factory or asyncio.create_subprocess_exec
+        self.heartbeat_interval = heartbeat_interval
         self.events = EventBroker()
         self._wake = asyncio.Event()
         self._worker_task: asyncio.Task[None] | None = None
@@ -277,7 +285,7 @@ class JobManager:
                 progress=10,
                 started_at=utc_now(),
             )
-            self.store.append_log(job_id, "Starting inference")
+            self._record_inference_log(job_id, "Starting inference")
             await self.notify_job(job_id)
 
             environment = os.environ.copy()
@@ -301,14 +309,7 @@ class JobManager:
                 start_new_session=True,
             )
             self._current_process = process
-            assert process.stdout is not None
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
-                text = line.decode("utf-8", errors="replace")
-                self.store.append_log(job_id, text)
-                await self._phase_from_line(job_id, text)
+            await self._stream_process_output(job_id, process)
             return_code = await process.wait()
             current = self.store.get(job_id, raw=True)
             if current.get("cancel_requested"):
@@ -322,6 +323,7 @@ class JobManager:
             elif return_code != 0:
                 raise RuntimeError(f"Inference exited with status {return_code}")
             else:
+                self._record_inference_log(job_id, "Inference completed; packaging artifacts")
                 self.store.update(job_id, phase="packaging", progress=95)
                 artifacts = await asyncio.to_thread(self._package_artifacts, job_id)
                 self.store.update(
@@ -336,7 +338,7 @@ class JobManager:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.store.append_log(job_id, f"ERROR: {exc}")
+            self._record_inference_log(job_id, f"ERROR: {exc}")
             self.store.update(
                 job_id,
                 state="failed",
@@ -350,7 +352,57 @@ class JobManager:
             self._current_job = None
             self._current_process = None
 
-    async def _phase_from_line(self, job_id: str, line: str) -> None:
+    def _record_inference_log(self, job_id: str, line: str) -> str:
+        clean = ANSI_ESCAPE.sub("", line).replace("\r", "").rstrip("\n")
+        if not clean:
+            return ""
+        self.store.append_log(job_id, clean)
+        print(f"[inference {job_id[:8]}] {clean}", flush=True)
+        return clean
+
+    async def _stream_process_output(self, job_id: str, process: Any) -> None:
+        assert process.stdout is not None
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        last_output = started
+        read_task = asyncio.create_task(process.stdout.readline())
+        try:
+            while True:
+                done, _ = await asyncio.wait(
+                    {read_task},
+                    timeout=self.heartbeat_interval,
+                )
+                now = loop.time()
+                if not done:
+                    current = self.store.get(job_id, raw=True)
+                    phase = str(current.get("phase") or "inference").replace("_", " ")
+                    elapsed = round(now - started)
+                    quiet = round(now - last_output)
+                    self._record_inference_log(
+                        job_id,
+                        f"Heartbeat: {phase} is still running "
+                        f"({elapsed}s elapsed, no output for {quiet}s)",
+                    )
+                    await self.notify_job(job_id)
+                    continue
+
+                line = read_task.result()
+                if not line:
+                    break
+                text = line.decode("utf-8", errors="replace")
+                clean = self._record_inference_log(job_id, text)
+                if clean:
+                    last_output = now
+                    phase_changed = await self._phase_from_line(job_id, clean)
+                    if not phase_changed:
+                        await self.notify_job(job_id)
+                read_task = asyncio.create_task(process.stdout.readline())
+        finally:
+            if not read_task.done():
+                read_task.cancel()
+                await asyncio.gather(read_task, return_exceptions=True)
+
+    async def _phase_from_line(self, job_id: str, line: str) -> bool:
         lower = line.lower()
         for marker, phase, progress in PHASE_MARKERS:
             if marker in lower:
@@ -358,7 +410,8 @@ class JobManager:
                 if current.get("phase") != phase:
                     self.store.update(job_id, phase=phase, progress=progress)
                     await self.notify_job(job_id)
-                return
+                return True
+        return False
 
     async def _terminate_process(self, process: Any) -> None:
         if process.returncode is not None:

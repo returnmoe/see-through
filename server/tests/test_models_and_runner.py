@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import ast
 import json
 from dataclasses import replace
@@ -15,7 +16,8 @@ from seethrough_server.model_cache import (
     bundle_for_profile,
     select_profile,
 )
-from seethrough_server.runner import build_inference_command
+from seethrough_server.runner import JobManager, build_inference_command
+from seethrough_server.storage import JobStore
 
 
 def settings_for(tmp_path: Path) -> Settings:
@@ -140,6 +142,7 @@ def test_command_builder_passes_local_snapshots_without_shell(
         "seed": 123456789,
         "steps": 47,
         "depth_resolution": 1536,
+        "tblr_split": True,
     }
     command = build_inference_command(
         settings,
@@ -153,6 +156,7 @@ def test_command_builder_passes_local_snapshots_without_shell(
     assert "--save_to_psd" in command
     assert bundle_for_profile(profile) in {"bf16", "nf4"}
     assert "--disable_progressbar" in command
+    assert "--tblr_split" in command
     assert command[command.index("--seed") + 1] == "123456789"
     assert command[command.index("--resolution_depth") + 1] == "1536"
     steps_flag = (
@@ -177,6 +181,59 @@ def test_command_builder_defaults_controls_for_old_records(tmp_path: Path) -> No
     assert command[command.index("--seed") + 1] == "42"
     assert command[command.index("--inference_steps") + 1] == "30"
     assert command[command.index("--resolution_depth") + 1] == "768"
+    assert "--tblr_split" not in command
+
+
+@pytest.mark.asyncio
+async def test_inference_output_is_teed_and_heartbeat_reports_quiet_work(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class DelayedStream:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def readline(self) -> bytes:
+            self.calls += 1
+            if self.calls == 1:
+                await asyncio.sleep(0.025)
+                return b"\x1b[32mrunning layerdiff...\x1b[0m\n"
+            return b""
+
+    settings = settings_for(tmp_path)
+    store = JobStore(settings.data_dir)
+    staged = tmp_path / "source.png"
+    staged.write_bytes(b"source")
+    record = store.create(
+        staged_input=staged,
+        original_filename="source.png",
+        extension=".png",
+        profile="auto",
+        resolution=1280,
+    )
+    store.update(record["id"], state="running", phase="starting", progress=10)
+    manager = JobManager(
+        settings,
+        store,
+        ModelManager(settings, downloader=lambda *_: ""),
+        heartbeat_interval=0.005,
+    )
+
+    await manager._stream_process_output(
+        record["id"],
+        SimpleNamespace(stdout=DelayedStream()),
+    )
+
+    logs = store.get(record["id"])["logs"]
+    assert any("Heartbeat: starting is still running" in line for line in logs)
+    assert "running layerdiff..." in logs
+    assert all("\x1b" not in line for line in logs)
+    assert store.get(record["id"], raw=True)["phase"] == "layerdiff"
+
+    output = capsys.readouterr().out
+    assert f"[inference {record['id'][:8]}] Heartbeat:" in output
+    assert f"[inference {record['id'][:8]}] running layerdiff..." in output
+    assert "\x1b" not in output
 
 
 def test_gpu_probe_reports_every_device_and_preserves_first_gpu_fields(

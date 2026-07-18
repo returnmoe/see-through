@@ -18,6 +18,7 @@ export interface JobOptions {
   seed: number;
   steps: number;
   depth_resolution: Resolution;
+  tblr_split: boolean;
 }
 
 export interface Artifact {
@@ -55,6 +56,7 @@ export interface Job {
   seed?: number;
   steps?: number;
   depth_resolution?: Resolution;
+  tblr_split?: boolean;
   config?: {
     profile?: MemoryProfile;
     selected_profile?: MemoryProfile;
@@ -62,6 +64,7 @@ export interface Job {
     seed?: number;
     steps?: number;
     depth_resolution?: Resolution;
+    tblr_split?: boolean;
   };
   artifacts?: Artifact[];
   artifact_manifest?: Record<string, Omit<Artifact, 'name'> | string>;

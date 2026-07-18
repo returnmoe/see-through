@@ -154,6 +154,7 @@ def test_upload_validation_and_stubbed_job_completion(tmp_path: Path) -> None:
                 "seed": "4294967295",
                 "steps": "77",
                 "depth_resolution": "2048",
+                "tblr_split": "true",
             },
             headers=headers,
         )
@@ -165,6 +166,7 @@ def test_upload_validation_and_stubbed_job_completion(tmp_path: Path) -> None:
             "seed": 4294967295,
             "steps": 77,
             "depth_resolution": 2048,
+            "tblr_split": True,
         }
         job_id = created.json()["id"]
         deadline = time.monotonic() + 3

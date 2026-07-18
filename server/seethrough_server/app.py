@@ -141,6 +141,7 @@ def create_app(
         seed: int = Form(DEFAULT_SEED),
         steps: int = Form(DEFAULT_STEPS),
         depth_resolution: int = Form(DEFAULT_DEPTH_RESOLUTION),
+        tblr_split: bool = Form(False),
     ) -> dict[str, Any]:
         if profile not in PROFILES:
             raise HTTPException(422, f"profile must be one of: {', '.join(sorted(PROFILES))}")
@@ -204,6 +205,7 @@ def create_app(
                 seed=seed,
                 steps=steps,
                 depth_resolution=depth_resolution,
+                tblr_split=tblr_split,
             )
         finally:
             staged.unlink(missing_ok=True)

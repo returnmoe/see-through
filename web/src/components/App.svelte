@@ -50,7 +50,7 @@
     id: number;
     title: string;
     message: string;
-    tone: 'danger';
+    tone: 'danger' | 'success';
   };
   type DialogName = 'profile' | 'credits';
   type ModelStateCopy = {
@@ -64,6 +64,8 @@
   let selectedJob: Job | undefined;
   let artifacts: Artifact[] = [];
   let imageArtifacts: Artifact[] = [];
+  let archiveArtifact: Artifact | undefined;
+  let individualArtifacts: Artifact[] = [];
   let file: File | null = null;
   let filePreview: string | null = null;
   let profile: MemoryProfile = 'auto';
@@ -71,6 +73,7 @@
   let seed = 42;
   let steps = 30;
   let depthResolution: Resolution = 768;
+  let tblrSplit = false;
   let loading = true;
   let retryingApi = false;
   let submitting = false;
@@ -103,6 +106,12 @@
   $: imageArtifacts = artifacts.filter((artifact) =>
     artifact.kind === 'image' || artifact.mime_type?.startsWith('image/'),
   );
+  $: archiveArtifact = artifacts.find(
+    (artifact) => artifact.kind === 'archive' || artifact.name.toLowerCase().endsWith('.zip'),
+  );
+  $: individualArtifacts = archiveArtifact
+    ? artifacts.filter((artifact) => artifact !== archiveArtifact)
+    : artifacts;
   $: vramEstimate = estimateVram(
     profile,
     resolution,
@@ -272,14 +281,15 @@
         seed,
         steps,
         depth_resolution: depthResolution,
+        tblr_split: tblrSplit,
       });
       jobs = [created, ...jobs.filter((job) => job.id !== created.id)];
       selectedId = created.id;
-      noticeMessage = `Run ${created.id.slice(0, 8)} entered the queue.`;
-      file = null;
-      if (filePreview) URL.revokeObjectURL(filePreview);
-      filePreview = null;
-      if (fileInput) fileInput.value = '';
+      notify(
+        'Run queued',
+        `Run ${created.id.slice(0, 8)} entered the queue.`,
+        'success',
+      );
     } catch (error) {
       notifyFailure(
         'Job submission failed',
@@ -338,12 +348,16 @@
     }
   }
 
-  function notifyFailure(title: string, message: string): void {
+  function notify(title: string, message: string, tone: Toast['tone']): void {
     const id = ++toastSequence;
-    toasts = [...toasts, { id, title, message, tone: 'danger' }];
+    toasts = [...toasts, { id, title, message, tone }];
     noticeMessage = '';
     const timer = setTimeout(() => dismissToast(id), 5_000);
     toastTimers.set(id, timer);
+  }
+
+  function notifyFailure(title: string, message: string): void {
+    notify(title, message, 'danger');
   }
 
   function dismissToast(id: number): void {
@@ -739,6 +753,13 @@
               <small>Default · 768</small>
             </label>
           </div>
+          <label class="boolean-control">
+            <input name="tblr_split" type="checkbox" bind:checked={tblrSplit} />
+            <span>
+              <strong>Split left/right arms &amp; legs</strong>
+              <small>Separate paired limbs into individual PSD layers when possible.</small>
+            </span>
+          </label>
         </fieldset>
 
         <section class="vram-estimate {vramEstimate.fit}" aria-live="polite">
@@ -976,7 +997,28 @@
       <section class="artifacts" aria-labelledby="artifacts-title">
         <div class="dock-section-title"><h2 id="artifacts-title">Artifacts</h2><span>{artifacts.length}</span></div>
         {#if artifacts.length > 0}
-          <div class="artifact-list">{#each artifacts as artifact}<a href={artifactUrl(selectedJob.id, artifact)} download><span class="artifact-type">{artifact.name.split('.').pop()?.toUpperCase() ?? 'FILE'}</span><span><strong>{artifact.label ?? artifact.name}</strong><small>{formatBytes(artifact.size)}</small></span><b aria-hidden="true">↓</b></a>{/each}</div>
+          {#if archiveArtifact}
+            <a class="download-all" href={artifactUrl(selectedJob.id, archiveArtifact)} download>
+              <span class="artifact-type">ZIP</span>
+              <span>
+                <strong>Download all</strong>
+                <small>Complete artifact bundle · {formatBytes(archiveArtifact.size)}</small>
+              </span>
+              <b aria-hidden="true">↓</b>
+            </a>
+          {/if}
+          {#if individualArtifacts.length > 0}
+            <details class="individual-downloads">
+              <summary>
+                <span>
+                  <strong>Download individual files</strong>
+                  <small>{individualArtifacts.length} files</small>
+                </span>
+                <b aria-hidden="true">⌄</b>
+              </summary>
+              <div class="artifact-list">{#each individualArtifacts as artifact}<a href={artifactUrl(selectedJob.id, artifact)} download><span class="artifact-type">{artifact.name.split('.').pop()?.toUpperCase() ?? 'FILE'}</span><span><strong>{artifact.label ?? artifact.name}</strong><small>{formatBytes(artifact.size)}</small></span><b aria-hidden="true">↓</b></a>{/each}</div>
+            </details>
+          {/if}
         {:else}
           <p class="muted-copy">Downloads appear when processing completes.</p>
         {/if}
@@ -997,9 +1039,9 @@
   </aside>
   </div>
 
-  <div class="toast-region" aria-live="assertive" aria-relevant="additions" inert={modalOpen}>
+  <div class="toast-region" aria-live="polite" aria-relevant="additions" inert={modalOpen}>
     {#each toasts as toast (toast.id)}
-      <div class="toast" data-tone={toast.tone} role="alert">
+      <div class="toast" data-tone={toast.tone} role={toast.tone === 'danger' ? 'alert' : 'status'}>
         <span class="toast-tone" aria-hidden="true"></span>
         <div>
           <strong>{toast.title}</strong>

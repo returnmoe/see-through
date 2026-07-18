@@ -68,9 +68,11 @@ def test_view_normalizes_ui_fields_and_hides_artifact_path(tmp_path: Path) -> No
     assert view["config"]["seed"] == 42
     assert view["config"]["steps"] == 30
     assert view["config"]["depth_resolution"] == 768
+    assert view["config"]["tblr_split"] is False
     assert view["seed"] == 42
     assert view["steps"] == 30
     assert view["depth_resolution"] == 768
+    assert view["tblr_split"] is False
     assert "path" not in view["artifacts"][0]
     assert view["artifacts"][0]["url"].endswith("/artifacts/artifact")
 
@@ -83,15 +85,18 @@ def test_view_defaults_new_config_fields_for_old_records(tmp_path: Path) -> None
     del record["seed"]
     del record["steps"]
     del record["depth_resolution"]
+    del record["tblr_split"]
 
     view = store.view(record)
 
     assert view["config"]["seed"] == 42
     assert view["config"]["steps"] == 30
     assert view["config"]["depth_resolution"] == 768
+    assert view["config"]["tblr_split"] is False
     assert view["seed"] == 42
     assert view["steps"] == 30
     assert view["depth_resolution"] == 768
+    assert view["tblr_split"] is False
 
 
 def test_invalid_job_identifier_cannot_escape_data_directory(tmp_path: Path) -> None:
