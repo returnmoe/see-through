@@ -95,6 +95,7 @@ def build_layerdiff_pipeline(args):
         # Cache tag embeddings and unload text encoders to save VRAM
         pipeline.cache_tag_embeds()
 
+    pipeline.set_progress_bar_config(disable=getattr(args, 'disable_progressbar', False))
     return pipeline
 
 
@@ -130,6 +131,7 @@ def build_marigold_pipeline(args):
             marigold_pipe.enable_group_offload('cuda', num_blocks_per_group=1)
         marigold_pipe.cache_tag_embeds()
 
+    marigold_pipe.set_progress_bar_config(disable=getattr(args, 'disable_progressbar', False))
     return marigold_pipe
 
 
@@ -358,6 +360,8 @@ if __name__ == '__main__':
     parser.add_argument('--num_inference_steps', type=int, default=30)
     parser.add_argument('--resolution_depth', type=int, default=768,
                         help='Marigold depth inference resolution (default 768; -1 to match layerdiff resolution)')
+    parser.add_argument('--disable_progressbar', action='store_true',
+                        help='hide tqdm progress bars (useful for machine-readable logs)')
     parser.add_argument('--group_offload', action='store_true', default=True,
                         help='Enable group offload to reduce peak VRAM (default: on)')
     parser.add_argument('--no_group_offload', action='store_false', dest='group_offload',

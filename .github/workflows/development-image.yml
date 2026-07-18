@@ -1,0 +1,214 @@
+name: Development image
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [development]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: development-image-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/returnmoe/see-through
+
+jobs:
+  build:
+    if: >-
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'development' &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      ) || (
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      )
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      source_sha: ${{ steps.meta.outputs.source_sha }}
+      tree: ${{ steps.meta.outputs.tree }}
+      candidate: ${{ steps.reference.outputs.candidate }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || 'development' }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: meta
+        shell: bash
+        run: |
+          source_sha="$(git rev-parse HEAD)"
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          candidate="$IMAGE:build-$source_sha-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          created="$(git show -s --format=%cI HEAD)"
+          printf 'source_sha=%s\ntree=%s\ncandidate=%s\ncreated=%s\n' "$source_sha" "$tree" "$candidate" "$created" >>"$GITHUB_OUTPUT"
+      - name: Require successful CI for a manual build
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.meta.outputs.source_sha }}
+        shell: bash
+        run: |
+          runs="$(
+            gh api --method GET "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+              -f branch=development \
+              -f event=push \
+              -f per_page=100
+          )"
+          jq -e --arg sha "$SOURCE_SHA" \
+            'any(.workflow_runs[]; .head_sha == $sha and .status == "completed" and .conclusion == "success")' \
+            <<<"$runs" >/dev/null || {
+              echo "The current development commit ($SOURCE_SHA) does not have a successful push CI run." >&2
+              exit 1
+            }
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reuse an existing immutable tree image
+        id: existing
+        env:
+          TREE: ${{ steps.meta.outputs.tree }}
+        run: |
+          digest="$(docker buildx imagetools inspect "$IMAGE:tree-$TREE" 2>/dev/null | sed -n 's/^Digest:[[:space:]]*//p' | head -n1 || true)"
+          [[ -z "$digest" || "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
+          if [[ -n "$digest" ]]; then
+            echo "Reusing the previously published image for tree $TREE: $digest"
+          fi
+      - if: steps.existing.outputs.digest == ''
+        run: bash scripts/container/cleanup-runner.sh
+      - id: build
+        if: steps.existing.outputs.digest == ''
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          file: Dockerfile
+          target: runtime
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.candidate }}
+          build-args: |
+            VCS_REF=${{ steps.meta.outputs.source_sha }}
+            VERSION=development
+            BUILD_DATE=${{ steps.meta.outputs.created }}
+          outputs: type=image,push=true,compression=gzip,compression-level=6,force-compression=true,oci-mediatypes=false
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
+          provenance: mode=max
+          sbom: true
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        if: steps.existing.outputs.digest == ''
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+      - name: Select the image to inspect
+        id: reference
+        env:
+          BUILT_CANDIDATE: ${{ steps.meta.outputs.candidate }}
+          EXISTING_DIGEST: ${{ steps.existing.outputs.digest }}
+        run: |
+          candidate="$BUILT_CANDIDATE"
+          if [[ -n "$EXISTING_DIGEST" ]]; then
+            candidate="$IMAGE@$EXISTING_DIGEST"
+          fi
+          printf 'candidate=%s\n' "$candidate" >>"$GITHUB_OUTPUT"
+
+
+  inspect-and-scan:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    outputs:
+      digest: ${{ steps.policy.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.build.outputs.source_sha }}
+      - run: bash scripts/container/cleanup-runner.sh
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: policy
+        run: bash scripts/container/validate-image.sh '${{ needs.build.outputs.candidate }}' image-policy-report
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-policy-${{ needs.build.outputs.source_sha }}
+          path: image-policy-report/
+          retention-days: 90
+      - uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          image-ref: ${{ steps.policy.outputs.deployment_ref }}
+          format: sarif
+          output: trivy.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '0'
+      - uses: github/codeql-action/upload-sarif@c298edae2d512d807fe4bdc57c0ac5a036f61501 # v3.29.11
+        if: always()
+        with:
+          sarif_file: trivy.sarif
+      - uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          image-ref: ${{ steps.policy.outputs.deployment_ref }}
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: false
+          exit-code: '1'
+
+  publish-development:
+    needs: [build, inspect-and-scan]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.build.outputs.source_sha }}
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - name: Verify that GHCR is publicly readable
+        run: |
+          docker buildx imagetools inspect '${{ env.IMAGE }}@${{ needs.inspect-and-scan.outputs.digest }}' >/dev/null || {
+            echo 'The image was built and scanned, but its GHCR package is not publicly readable.' >&2
+            echo 'Set the package visibility to public, then use "Re-run failed jobs" for this run.' >&2
+            echo 'The container image is a GHCR package; the Actions artifact is only the policy report.' >&2
+            exit 1
+          }
+      - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: bash scripts/container/promote-image.sh "$IMAGE" '${{ needs.inspect-and-scan.outputs.digest }}' immutable 'dev-sha-${{ needs.build.outputs.source_sha }}' 'tree-${{ needs.build.outputs.tree }}'
+      - run: bash scripts/container/promote-image.sh "$IMAGE" '${{ needs.inspect-and-scan.outputs.digest }}' moving development
+      - run: |
+          {
+            echo '### Development image'
+            echo '`${{ env.IMAGE }}@${{ needs.inspect-and-scan.outputs.digest }}`'
+            echo 'Tag: `${{ env.IMAGE }}:dev-sha-${{ needs.build.outputs.source_sha }}`'
+            echo 'Tree: `${{ needs.build.outputs.tree }}`'
+            echo
+            echo 'Use the digest or immutable `dev-sha-*` tag in RunPod. The downloadable Actions artifact contains only the policy report.'
+          } >>"$GITHUB_STEP_SUMMARY"

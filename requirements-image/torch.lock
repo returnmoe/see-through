@@ -1,0 +1,6 @@
+--index-url https://download.pytorch.org/whl/cu128
+
+torch==2.8.0+cu128 \
+    --hash=sha256:4354fc05bb79b208d6995a04ca1ceef6a9547b1c4334435574353d381c55087c
+triton==3.4.0 \
+    --hash=sha256:8550672b1184f05187f4140db32e33e61b592046fd3e1eb907e3b7db5321b750

@@ -29,6 +29,38 @@ We introduce a framework that automates the transformation of static anime illus
 
 ![Our Representative Image](common/assets/representative.jpg)
 
+## RunPod image
+
+The release automation publishes RunPod-ready GPU images and a loopback-only web
+interface through GHCR. The deployable image is a GHCR container package—not a
+downloadable GitHub Actions artifact; Actions stores only its policy report.
+SSH is key-only and starts only when `PUBLIC_KEY` or `SSH_PUBLIC_KEY` is
+provided, and model weights are downloaded after container startup instead of
+being bundled into the image. Use the immutable digest or `dev-sha-*` tag shown
+in the Development image workflow summary for a RunPod test.
+
+See the [complete RunPod guide](docs/runpod.md) for template settings, host-key
+fingerprint verification, SSH tunneling, model storage, and the full inference
+workflow. The [hardware and resolution guide](docs/hardware.md) includes VRAM
+estimates, Auto profile thresholds, disk/RAM planning, and concrete RunPod GPU
+choices. Maintainers should also read the [container release process](docs/releases.md).
+
+### Preview the interface without a model
+
+The frontend can be viewed without CUDA, a GPU, model weights, or the Python
+service. With Node.js 24 and npm 11:
+
+```bash
+cd web
+npm ci
+npm run dev
+```
+
+Open <http://127.0.0.1:4321>. Theme switching, responsive layout, upload
+preview, configuration controls, the VRAM estimator, model-profile dialog, and
+credits dialog work locally. GPU/model detection and job submission require the
+Python service, so they remain unavailable in this UI-only mode.
+
 
 <div align="center">
   
@@ -157,7 +189,16 @@ python inference/scripts/heuristic_partseg.py seg_wlr --srcp workspace/test_samp
 
 ### Low-VRAM Users
 
+For container and RunPod users, see the complete [hardware and resolution
+sizing guide](docs/hardware.md). It distinguishes measured/published peak
+estimates from the more conservative deployment thresholds used by Auto.
+
 The default pipeline runs at bf16 precision and requires approximately 12-16 GB of VRAM at 1280 resolution.
+
+The container UI accepts LayerDiff working sizes from 768 through 10240 in
+multiples of 64 and shows a per-GPU VRAM planning estimate. The released V3
+default and validated baseline remains 1280; larger untiled sizes are
+experimental, not a guarantee that a 10k job will fit or complete.
 
 **12 GB GPUs**: Enable group offload to reduce peak VRAM to ~10 GB at 1280 resolution:
 
@@ -174,7 +215,7 @@ python inference/scripts/inference_psd.py \
 # Install bitsandbytes (one-time)
 pip install -r requirements-inference-bnb.txt
 
-# Run with NF4 quantization (default: group_offload on, depth resolution 720)
+# Run with NF4 quantization (default: group_offload on, depth resolution 768)
 python inference/scripts/inference_psd_quantized.py \
   --srcp assets/test_image.png \
   --save_to_psd

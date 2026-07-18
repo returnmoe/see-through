@@ -1,0 +1,2 @@
+nvidia-cublas-cu12==12.8.4.1 \
+    --hash=sha256:8ac4e771d5a348c551b2a426eda6193c19aa630236b418086020df5ba9667142

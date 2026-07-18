@@ -1,0 +1,33 @@
+---
+import '@fontsource/inter/latin-400.css';
+import '@fontsource/inter/latin-500.css';
+import '@fontsource/inter/latin-600.css';
+import '@fontsource/inter/latin-700.css';
+import '@/styles/global.css';
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <script is:inline src="/theme-init.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <meta
+      name="description"
+      content="An independent, local-first workspace for See-Through layer decomposition"
+    />
+    <title>See-Through · Layer workspace</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script>
+      import { mount } from 'svelte';
+      import App from '@/components/App.svelte';
+
+      const target = document.getElementById('app');
+      if (target) mount(App, { target });
+    </script>
+    <noscript>This workspace requires JavaScript to communicate with the local inference API.</noscript>
+  </body>
+</html>

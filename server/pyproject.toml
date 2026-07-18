@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools==82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "see-through-server"
+version = "0.1.0"
+description = "Loopback-first RunPod service for See-through inference"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi==0.139.0",
+  "huggingface-hub==1.7.2",
+  "pillow==12.1.1",
+  "pillow-jxl-plugin==1.3.7",
+  "python-multipart==0.0.32",
+  "uvicorn[standard]==0.51.0",
+]
+
+[project.optional-dependencies]
+test = [
+  "httpx==0.28.1",
+  "pytest==9.0.2",
+  "pytest-asyncio==1.3.0",
+]
+
+[project.scripts]
+see-through-server = "seethrough_server.__main__:main"
+
+[tool.setuptools.package-data]
+seethrough_server = ["model-lock.json"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+ssh-keygen -q -t ed25519 -N '' -f "$tmp/key-one"
+ssh-keygen -q -t ed25519 -N '' -f "$tmp/key-two"
+
+set +e
+env -u PUBLIC_KEY -u SSH_PUBLIC_KEY \
+    "$root/docker/validate_authorized_keys.py" "$tmp/none"
+status=$?
+set -e
+[[ "$status" == 3 && ! -e "$tmp/none" ]]
+
+PUBLIC_KEY="$(<"$tmp/key-one.pub")" \
+    "$root/docker/validate_authorized_keys.py" "$tmp/public"
+[[ "$(wc -l <"$tmp/public")" == 1 ]]
+[[ "$(stat -c %a "$tmp/public")" == 600 ]]
+
+SSH_PUBLIC_KEY="$(<"$tmp/key-two.pub")" \
+    "$root/docker/validate_authorized_keys.py" "$tmp/ssh-public"
+[[ "$(wc -l <"$tmp/ssh-public")" == 1 ]]
+
+PUBLIC_KEY="$(<"$tmp/key-one.pub")" \
+SSH_PUBLIC_KEY="$(<"$tmp/key-one.pub")"$'\n'"$(<"$tmp/key-two.pub")" \
+    "$root/docker/validate_authorized_keys.py" "$tmp/combined"
+[[ "$(wc -l <"$tmp/combined")" == 2 ]]
+
+set +e
+PUBLIC_KEY="$(<"$tmp/key-one.pub")" SSH_PUBLIC_KEY='ssh-ed25519 not-base64 secret-marker' \
+    "$root/docker/validate_authorized_keys.py" "$tmp/invalid" 2>"$tmp/error"
+status=$?
+set -e
+[[ "$status" == 2 && ! -e "$tmp/invalid" ]]
+! grep -q 'secret-marker' "$tmp/error"
+
+[[ "$(env -u SEE_THROUGH_BIND_HOST -u SEE_THROUGH_PORT "$root/docker/listener_contract.py")" == "127.0.0.1:4321" ]]
+[[ "$(SEE_THROUGH_BIND_HOST=0.0.0.0 SEE_THROUGH_PORT=4545 "$root/docker/listener_contract.py")" == "127.0.0.1:4545" ]]
+[[ "$(SEE_THROUGH_BIND_HOST=:: SEE_THROUGH_PORT=4545 "$root/docker/listener_contract.py")" == "[::1]:4545" ]]
+[[ "$(SEE_THROUGH_BIND_HOST=10.0.0.5 SEE_THROUGH_PORT=5000 "$root/docker/listener_contract.py")" == "10.0.0.5:5000" ]]
+! SEE_THROUGH_BIND_HOST=localhost "$root/docker/listener_contract.py" >/dev/null 2>&1
+! SEE_THROUGH_PORT=22 "$root/docker/listener_contract.py" >/dev/null 2>&1
+
+python3 "$root/scripts/container/test-healthcheck.py"
+
+echo "entrypoint helper contract: OK"

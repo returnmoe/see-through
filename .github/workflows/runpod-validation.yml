@@ -1,0 +1,72 @@
+name: Record RunPod validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      development_sha:
+        description: Full 40-character development commit SHA tested on RunPod
+        required: true
+        type: string
+      evidence:
+        description: RunPod test notes or an evidence URL
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/returnmoe/see-through
+  DEVELOPMENT_SHA: ${{ inputs.development_sha }}
+  EVIDENCE: ${{ inputs.evidence }}
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    environment: runpod-validation
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Validate input
+        run: '[[ "$DEVELOPMENT_SHA" =~ ^[0-9a-f]{40}$ ]]'
+      - name: Check out the candidate without credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.development_sha }}
+          fetch-depth: 0
+          path: candidate
+          persist-credentials: false
+      - name: Check out trusted release tooling
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: master
+          path: trusted
+          persist-credentials: false
+      - id: meta
+        run: |
+          actual="$(git -C candidate rev-parse HEAD)"
+          [[ "$actual" == "$DEVELOPMENT_SHA" ]]
+          printf 'tree=%s\n' "$(git -C candidate rev-parse 'HEAD^{tree}')" >>"$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - name: Verify public candidate and tree identity
+        id: image
+        run: |
+          dev_digest="$(docker buildx imagetools inspect "$IMAGE:dev-sha-$DEVELOPMENT_SHA" | sed -n 's/^Digest:[[:space:]]*//p' | head -n1)"
+          tree_digest="$(docker buildx imagetools inspect "$IMAGE:tree-${{ steps.meta.outputs.tree }}" | sed -n 's/^Digest:[[:space:]]*//p' | head -n1)"
+          [[ -n "$dev_digest" && "$dev_digest" == "$tree_digest" ]]
+          printf 'digest=%s\n' "$dev_digest" >>"$GITHUB_OUTPUT"
+      - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: bash trusted/scripts/container/promote-image.sh "$IMAGE" '${{ steps.image.outputs.digest }}' immutable 'validated-tree-${{ steps.meta.outputs.tree }}'
+      - run: |
+          {
+            echo '### RunPod acceptance recorded'
+            echo 'Digest: `${{ env.IMAGE }}@${{ steps.image.outputs.digest }}`'
+            echo 'Tree: `${{ steps.meta.outputs.tree }}`'
+            printf 'Evidence: %s\n' "$EVIDENCE"
+          } >>"$GITHUB_STEP_SUMMARY"

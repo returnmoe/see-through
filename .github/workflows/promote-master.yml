@@ -1,0 +1,46 @@
+name: Promote master image
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote-master
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/returnmoe/see-through
+
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - id: meta
+        run: |
+          printf 'sha=%s\n' "$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+          printf 'tree=%s\n' "$(git rev-parse 'HEAD^{tree}')" >>"$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - name: Require the exact validated development tree
+        id: image
+        run: |
+          tree_digest="$(docker buildx imagetools inspect "$IMAGE:tree-${{ steps.meta.outputs.tree }}" | sed -n 's/^Digest:[[:space:]]*//p' | head -n1)"
+          validated_digest="$(docker buildx imagetools inspect "$IMAGE:validated-tree-${{ steps.meta.outputs.tree }}" | sed -n 's/^Digest:[[:space:]]*//p' | head -n1)"
+          [[ -n "$tree_digest" && "$tree_digest" == "$validated_digest" ]]
+          printf 'digest=%s\n' "$tree_digest" >>"$GITHUB_OUTPUT"
+      - uses: docker/login-action@184bdaa0721073962dff0199f1fb9940f07167d1 # v3.5.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: bash scripts/container/promote-image.sh "$IMAGE" '${{ steps.image.outputs.digest }}' immutable 'sha-${{ steps.meta.outputs.sha }}'
+      - run: bash scripts/container/promote-image.sh "$IMAGE" '${{ steps.image.outputs.digest }}' moving edge

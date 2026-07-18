@@ -10,6 +10,8 @@ workspace/
 
 # ── Python ────────────────────────────────────────────────────────
 __pycache__/
+.pytest_cache/
+.ruff_cache/
 *.py[cod]
 *$py.class
 *.egg-info/
@@ -29,6 +31,7 @@ Thumbs.db
 
 # ── Misc artifacts ────────────────────────────────────────────────
 tmp/
+/reference_only/
 *.log
 wandb/
 local_*

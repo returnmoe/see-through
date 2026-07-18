@@ -28,7 +28,6 @@
 # If you find Marigold useful, we kindly ask you to cite our papers.
 # --------------------------------------------------------------------------
 
-import matplotlib
 import numpy as np
 import torch
 from torchvision.transforms import InterpolationMode
@@ -41,6 +40,11 @@ def colorize_depth_maps(
     """
     Colorize depth maps.
     """
+    # Matplotlib is only needed for the optional colored-depth preview.  The
+    # See-through inference path passes ``color_map=None`` and should not need
+    # the sizeable visualization stack merely to import Marigold.
+    import matplotlib
+
     assert len(depth_map.shape) >= 2, "Invalid dimension"
 
     if isinstance(depth_map, torch.Tensor):

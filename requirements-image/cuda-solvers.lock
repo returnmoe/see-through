@@ -1,0 +1,4 @@
+nvidia-cufft-cu12==11.3.3.83 \
+    --hash=sha256:4d2dd21ec0b88cf61b62e6b43564355e5222e4a3fb394cac0db101f2dd0d4f74
+nvidia-cusolver-cu12==11.7.3.90 \
+    --hash=sha256:4376c11ad263152bd50ea295c05370360776f8c3427b30991df774f9fb26c450

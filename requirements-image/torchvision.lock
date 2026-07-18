@@ -1,0 +1,4 @@
+--index-url https://download.pytorch.org/whl/cu128
+
+torchvision==0.23.0+cu128 \
+    --hash=sha256:9cb3c13997afcb44057ca10d943c6c4cba3068afde0f370965abce9c89fcffa9

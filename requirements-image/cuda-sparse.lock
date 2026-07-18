@@ -1,0 +1,4 @@
+nvidia-cusparse-cu12==12.5.8.93 \
+    --hash=sha256:1ec05d76bbbd8b61b06a80e1eaf8cf4959c3d4ce8e711b65ebd0443bb0ebb13b
+nvidia-cusparselt-cu12==0.7.1 \
+    --hash=sha256:f1bb701d6b930d5a7cea44c19ceb973311500847f81b634d802b7b539dc55623

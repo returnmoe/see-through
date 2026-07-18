@@ -380,8 +380,11 @@ if __name__ == '__main__':
     parser.add_argument('--save_to_psd', action='store_true')
     parser.add_argument('--tblr_split', action='store_true')
     parser.add_argument('--repo_id_layerdiff', type=str, default='layerdifforg/seethroughv0.0.2_layerdiff3d')
+    parser.add_argument('--repo_id_depth', type=str, default='24yearsold/seethroughv0.0.1_marigold')
     parser.add_argument('--num_inference_steps', type=int, default=30)
     parser.add_argument('--resolution_depth', type=int, default=768)
+    parser.add_argument('--disable_progressbar', action='store_true',
+                        help='hide tqdm progress bars (useful for machine-readable logs)')
     args = parser.parse_args()
 
     srcname = osp.basename(osp.splitext(args.srcp)[0])
@@ -394,6 +397,7 @@ if __name__ == '__main__':
     pipeline = KDiffusionStableDiffusionXLPipelineBlockSwap.from_pretrained(
         args.repo_id_layerdiff, trans_vae=trans_vae, unet=unet, scheduler=None
     )
+    pipeline.set_progress_bar_config(disable=args.disable_progressbar)
     pipeline.enable_blockswap(device='cuda')
     pipeline.cache_tag_embeds()
 
@@ -404,7 +408,13 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
 
     print('\nBuilding Marigold depth pipeline...')
-    marigold_args = argparse.Namespace(quant_mode='none', cpu_offload=False, repo_id_depth='24yearsold/seethroughv0.0.1_marigold')
+    marigold_args = argparse.Namespace(
+        quant_mode='none',
+        cpu_offload=False,
+        group_offload=False,
+        disable_progressbar=args.disable_progressbar,
+        repo_id_depth=args.repo_id_depth,
+    )
     marigold_pipe = build_marigold_pipeline(marigold_args)
 
     print('Running Marigold depth...')

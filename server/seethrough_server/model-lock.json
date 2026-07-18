@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "bundles": {
+    "bf16": {
+      "expected_size_bytes": 14495514624,
+      "repositories": {
+        "layerdiff": {
+          "repo_id": "layerdifforg/seethroughv0.0.2_layerdiff3d",
+          "revision": "966721bb4ef2ddc3af3696862fa10b3f78d9785d"
+        },
+        "depth": {
+          "repo_id": "24yearsold/seethroughv0.0.1_marigold",
+          "revision": "aa7a892f83ff68d7b09186a405ba08d5d33f770f"
+        }
+      }
+    },
+    "nf4": {
+      "expected_size_bytes": 6120328397,
+      "repositories": {
+        "layerdiff": {
+          "repo_id": "24yearsold/seethroughv0.0.2_layerdiff3d_nf4",
+          "revision": "39b9881340189810bebabe5462756fb2e8fbd5fa"
+        },
+        "depth": {
+          "repo_id": "24yearsold/seethroughv0.0.1_marigold_nf4",
+          "revision": "aad13aafa9f3c72defb40a9d9225cec70b0eab16"
+        }
+      }
+    }
+  }
+}
