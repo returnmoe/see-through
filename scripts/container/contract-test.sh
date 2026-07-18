@@ -66,6 +66,7 @@ docker exec "$no_key" curl --fail --silent --show-error --max-time 3 \
 grep -Fq '"status":"ok"' "$tmp/healthz.json"
 capture_logs "$no_key" "$tmp/no-key.log"
 grep -Fq 'SSH disabled:' "$tmp/no-key.log"
+docker exec "$no_key" grep -Fxq 'export SEE_THROUGH_SSH_REQUIRED=0' /run/see-through/runtime.env
 
 invalid="$prefix-invalid"
 start "$invalid" --env SEE_THROUGH_PREFETCH=off --env 'PUBLIC_KEY=ssh-ed25519 invalid secret-marker'
@@ -81,14 +82,24 @@ docker run --detach --name "$valid" --publish 127.0.0.1::22 \
     "$image" >/dev/null
 wait_healthy "$valid"
 socket_state "$valid" 22 True
+[[ "$(docker exec "$valid" stat -c %a /root/.ssh)" == 700 ]]
+docker exec "$valid" test ! -e /root/.ssh/authorized_keys
 [[ "$(docker exec "$valid" stat -c %a /run/see-through/authorized_keys)" == 600 ]]
-[[ "$(docker exec "$valid" sh -c 'wc -l </run/see-through/authorized_keys')" == 2 ]]
-docker exec "$valid" /usr/sbin/sshd -T -f /run/see-through/sshd_config >"$tmp/sshd-effective"
+[[ "$(docker exec "$valid" sh -c 'wc -l </run/see-through/authorized_keys')" == 1 ]]
+for host_key_type in rsa ecdsa ed25519; do
+    [[ "$(docker exec "$valid" stat -c %a "/etc/ssh/ssh_host_${host_key_type}_key")" == 600 ]]
+done
+docker exec "$valid" test ! -e /run/see-through/ssh_host_ed25519_key
+docker exec "$valid" test ! -e /run/see-through/sshd_config
+docker exec "$valid" grep -Fxq 'export SEE_THROUGH_SSH_REQUIRED=1' /run/see-through/runtime.env
+docker exec "$valid" /usr/sbin/sshd -T >"$tmp/sshd-effective"
 grep -Fxq 'passwordauthentication no' "$tmp/sshd-effective"
 grep -Fxq 'kbdinteractiveauthentication no' "$tmp/sshd-effective"
+grep -Fxq 'usepam yes' "$tmp/sshd-effective"
 grep -Eq '^permitrootlogin (without-password|prohibit-password)$' "$tmp/sshd-effective"
 grep -Fxq 'allowtcpforwarding local' "$tmp/sshd-effective"
 grep -Fxq 'permitopen 127.0.0.1:4321' "$tmp/sshd-effective"
+docker exec "$valid" passwd -S root | grep -Eq '^root L '
 
 mapped="$(docker port "$valid" 22/tcp | head -n1)"
 host_port="${mapped##*:}"
@@ -99,29 +110,76 @@ done
 fingerprint="$(ssh-keygen -l -E sha256 -f "$tmp/known-hosts" | awk 'NR==1 {print $2}')"
 capture_logs "$valid" "$tmp/valid.log"
 grep -Fq "$fingerprint" "$tmp/valid.log"
-ssh -p "$host_port" -i "$tmp/key-one" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+for host_key_type in rsa ecdsa ed25519; do
+    public_key="/etc/ssh/ssh_host_${host_key_type}_key.pub"
+    host_fingerprint="$(docker exec "$valid" ssh-keygen -l -E sha256 -f "$public_key")"
+    grep -Fqx "SSH host key $(basename "$public_key") fingerprint: $host_fingerprint" "$tmp/valid.log"
+done
+! ssh -p "$host_port" -i "$tmp/key-one" -o BatchMode=yes -o StrictHostKeyChecking=yes \
     -o UserKnownHostsFile="$tmp/known-hosts" root@127.0.0.1 'see-through help >/dev/null'
 ssh -p "$host_port" -i "$tmp/key-two" -o BatchMode=yes -o StrictHostKeyChecking=yes \
-    -o UserKnownHostsFile="$tmp/known-hosts" root@127.0.0.1 true
+    -o UserKnownHostsFile="$tmp/known-hosts" root@127.0.0.1 'see-through help >/dev/null'
 ! ssh -p "$host_port" -i "$tmp/key-wrong" -o BatchMode=yes -o StrictHostKeyChecking=yes \
     -o UserKnownHostsFile="$tmp/known-hosts" root@127.0.0.1 true
+
+nested="$prefix-nested-init"
+containers+=("$nested")
+docker run --detach --init --name "$nested" --publish 127.0.0.1::22 \
+    --env SEE_THROUGH_PREFETCH=off --env "SSH_PUBLIC_KEY=$key_one" \
+    "$image" >/dev/null
+wait_healthy "$nested"
+socket_state "$nested" 22 True
+capture_logs "$nested" "$tmp/nested.log"
+! grep -Fq 'Tini is not running as PID 1' "$tmp/nested.log"
+nested_mapped="$(docker port "$nested" 22/tcp | head -n1)"
+nested_host_port="${nested_mapped##*:}"
+for _ in {1..30}; do
+    ssh-keyscan -p "$nested_host_port" 127.0.0.1 >"$tmp/nested-known-hosts" 2>/dev/null \
+        && [[ -s "$tmp/nested-known-hosts" ]] && break
+    sleep 1
+done
+ssh -p "$nested_host_port" -i "$tmp/key-one" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile="$tmp/nested-known-hosts" root@127.0.0.1 true
+
+source_file="$tmp/source-authorized-keys"
+cp "$tmp/key-one.pub" "$source_file"
+chmod 0600 "$source_file"
+file_source="$prefix-file-source"
+containers+=("$file_source")
+docker run --detach --name "$file_source" --publish 127.0.0.1::22 \
+    --env SEE_THROUGH_PREFETCH=off --env "PUBLIC_KEY=$key_two" \
+    --mount "type=bind,source=$source_file,target=/root/.ssh/authorized_keys,readonly" \
+    "$image" >/dev/null
+wait_healthy "$file_source"
+[[ "$(docker exec "$file_source" sh -c 'wc -l </run/see-through/authorized_keys')" == 1 ]]
+file_source_mapped="$(docker port "$file_source" 22/tcp | head -n1)"
+file_source_port="${file_source_mapped##*:}"
+for _ in {1..30}; do
+    ssh-keyscan -p "$file_source_port" 127.0.0.1 >"$tmp/file-source-known-hosts" 2>/dev/null \
+        && [[ -s "$tmp/file-source-known-hosts" ]] && break
+    sleep 1
+done
+ssh -p "$file_source_port" -i "$tmp/key-one" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile="$tmp/file-source-known-hosts" root@127.0.0.1 true
+! ssh -p "$file_source_port" -i "$tmp/key-two" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile="$tmp/file-source-known-hosts" root@127.0.0.1 true
 
 custom="$prefix-custom"
 start "$custom" --env SEE_THROUGH_PREFETCH=off --env "SSH_PUBLIC_KEY=$key_one" \
     --env SEE_THROUGH_BIND_HOST=0.0.0.0 --env SEE_THROUGH_PORT=4545
 wait_healthy "$custom"
 socket_state "$custom" 4545 True
-docker exec "$custom" /usr/sbin/sshd -T -f /run/see-through/sshd_config >"$tmp/custom-sshd-effective"
+docker exec "$custom" /usr/sbin/sshd -T >"$tmp/custom-sshd-effective"
 grep -Fxq 'permitopen 127.0.0.1:4545' "$tmp/custom-sshd-effective"
 
 preexisting="$prefix-preexisting"
 containers+=("$preexisting")
 docker run --detach --name "$preexisting" --entrypoint /bin/bash \
     --env SEE_THROUGH_PREFETCH=off --env "PUBLIC_KEY=$key_one" "$image" -c \
-    'mkdir -p /run/see-through; ssh-keygen -q -t ed25519 -N "" -f /run/see-through/ssh_host_ed25519_key; ssh-keygen -l -E sha256 -f /run/see-through/ssh_host_ed25519_key.pub | awk "{print \$2}" >/tmp/old-fingerprint; exec /usr/bin/tini -g -- /usr/local/bin/see-through-entrypoint' >/dev/null
+    'mkdir -p /run/see-through; ssh-keygen -q -t ed25519 -N "" -f /etc/ssh/ssh_host_ed25519_key; ssh-keygen -l -E sha256 -f /etc/ssh/ssh_host_ed25519_key.pub | awk "{print \$2}" >/tmp/old-fingerprint; exec /usr/bin/tini -s -g -- /usr/local/bin/see-through-entrypoint' >/dev/null
 wait_healthy "$preexisting"
 old_fingerprint="$(docker exec "$preexisting" cat /tmp/old-fingerprint)"
-new_fingerprint="$(docker exec "$preexisting" ssh-keygen -l -E sha256 -f /run/see-through/ssh_host_ed25519_key.pub | awk '{print $2}')"
+new_fingerprint="$(docker exec "$preexisting" ssh-keygen -l -E sha256 -f /etc/ssh/ssh_host_ed25519_key.pub | awk '{print $2}')"
 [[ "$old_fingerprint" != "$new_fingerprint" ]]
 
 exposed="$(docker image inspect "$image" --format '{{json .Config.ExposedPorts}}')"

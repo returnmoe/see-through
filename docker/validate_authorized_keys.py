@@ -76,18 +76,33 @@ def _validate_line(line: str) -> tuple[str, str]:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: validate_authorized_keys.py OUTPUT", file=sys.stderr)
+    if len(sys.argv) not in (2, 3):
+        print("usage: validate_authorized_keys.py OUTPUT [SOURCE]", file=sys.stderr)
         return 64
 
-    supplied = [os.environ.get("PUBLIC_KEY", ""), os.environ.get("SSH_PUBLIC_KEY", "")]
-    if sum(len(value.encode("utf-8")) for value in supplied) > MAX_ENV_BYTES:
+    # Match RunPod/Miru source precedence. SSH_PUBLIC_KEY is the documented
+    # per-Pod override, not an additional key set.
+    supplied = os.environ.get("SSH_PUBLIC_KEY", "")
+    if not supplied and len(sys.argv) == 3:
+        source = Path(sys.argv[2])
+        try:
+            supplied = source.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            pass
+        except (OSError, UnicodeError):
+            print("SSH disabled: root authorized_keys source is unreadable", file=sys.stderr)
+            return 2
+    if not supplied:
+        supplied = os.environ.get("PUBLIC_KEY", "")
+
+    if len(supplied.encode("utf-8")) > MAX_ENV_BYTES:
         print("SSH disabled: supplied key set is too large", file=sys.stderr)
         return 2
 
-    raw_lines: list[str] = []
-    for value in supplied:
-        raw_lines.extend(line.strip() for line in value.replace("\r\n", "\n").replace("\r", "\n").split("\n"))
+    raw_lines = [
+        line.strip()
+        for line in supplied.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    ]
     lines = [line for line in raw_lines if line]
     if not lines:
         return 3

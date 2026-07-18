@@ -16,6 +16,7 @@ values = {
     "SEE_THROUGH_DATA_DIR": os.environ["SEE_THROUGH_DATA_DIR"],
     "SEE_THROUGH_MODEL_CACHE": os.environ["SEE_THROUGH_MODEL_CACHE"],
     "SEE_THROUGH_PREFETCH": os.environ.get("SEE_THROUGH_PREFETCH", "auto"),
+    "SEE_THROUGH_SSH_REQUIRED": os.environ.get("SEE_THROUGH_SSH_REQUIRED", "0"),
     "HF_HOME": os.environ["HF_HOME"],
 }
 fd, temporary_name = tempfile.mkstemp(prefix="runtime.env.", dir=destination.parent)

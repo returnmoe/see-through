@@ -7,6 +7,7 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 from typing import Iterator
 
@@ -59,10 +60,23 @@ def health_server(
         server.server_close()
 
 
-def run_healthcheck(bind_host: str, port: int) -> subprocess.CompletedProcess[str]:
+def run_healthcheck(
+    bind_host: str,
+    port: int,
+    *,
+    runtime_env: Path | None = None,
+    ssh_port: int | None = None,
+    sshd_pid_file: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["SEE_THROUGH_BIND_HOST"] = bind_host
     env["SEE_THROUGH_PORT"] = str(port)
+    if runtime_env is not None:
+        env["SEE_THROUGH_RUNTIME_ENV_FILE"] = str(runtime_env)
+    if ssh_port is not None:
+        env["SEE_THROUGH_SSH_HEALTHCHECK_PORT"] = str(ssh_port)
+    if sshd_pid_file is not None:
+        env["SEE_THROUGH_SSHD_PID_FILE"] = str(sshd_pid_file)
     return subprocess.run(
         [sys.executable, str(HEALTHCHECK)],
         check=False,
@@ -97,13 +111,30 @@ def main() -> None:
         assert "/healthz returned HTTP 503" in result.stderr
         assert handler.requests[0][0] == "/healthz"
 
+    with tempfile.TemporaryDirectory() as temporary:
+        runtime_env = Path(temporary) / "runtime.env"
+        runtime_env.write_text(
+            "export SEE_THROUGH_SSH_REQUIRED=1\n",
+            encoding="utf-8",
+        )
+        with health_server("127.0.0.1") as (server, _):
+            result = run_healthcheck(
+                "127.0.0.1",
+                server.server_address[1],
+                runtime_env=runtime_env,
+                ssh_port=1,
+                sshd_pid_file=Path(temporary) / "sshd.pid",
+            )
+        assert result.returncode != 0
+        assert "SSH was enabled at startup but its PID file is invalid" in result.stderr
+
     if socket.has_ipv6:
         try:
             assert_success("::1", "::", "[::1]")
         except OSError:
             pass
 
-    print("HTTP healthcheck contract: OK")
+    print("container healthcheck contract: OK")
 
 
 if __name__ == "__main__":

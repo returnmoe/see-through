@@ -29,6 +29,7 @@ RUN apt-get update \
     && rm -f /etc/ssh/ssh_host_* \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/venv \
+    && passwd -l root \
     && (getent group video >/dev/null || groupadd --system video)
 RUN useradd --uid 10001 --create-home --shell /bin/bash --groups video seethrough \
     && install -d -m 0755 /opt/see-through /usr/local/libexec/see-through \
@@ -52,12 +53,19 @@ ENV PATH=/opt/venv/bin:/usr/local/bin:/usr/bin:/bin \
 COPY docker/entrypoint.sh /usr/local/bin/see-through-entrypoint
 COPY docker/see-through /usr/local/bin/see-through
 COPY docker/validate_authorized_keys.py docker/listener_contract.py docker/write_runtime_env.py docker/healthcheck.py /usr/local/libexec/see-through/
+COPY docker/sshd-see-through.conf /etc/ssh/sshd_config.d/90-see-through-hardening.conf
 COPY docker/see-through-profile.sh /etc/profile.d/see-through.sh
 RUN chmod 0755 \
         /usr/local/bin/see-through-entrypoint \
         /usr/local/bin/see-through \
         /usr/local/libexec/see-through/*.py \
-    && chmod 0644 /etc/profile.d/see-through.sh
+    && chmod 0644 /etc/profile.d/see-through.sh /etc/ssh/sshd_config.d/90-see-through-hardening.conf \
+    && install -d -m 0700 /root/.ssh \
+    && install -d -m 0700 /run/see-through \
+    && install -d -m 0755 /run/sshd \
+    && ssh-keygen -A \
+    && /usr/sbin/sshd -t \
+    && rm -f /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub
 
 # Small, GPU-free image used by CI to exercise the exact production entrypoint,
 # sshd policy, static UI, and API startup without constructing the ML layers.
@@ -78,7 +86,7 @@ WORKDIR /opt/see-through
 EXPOSE 22
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD ["/usr/local/libexec/see-through/healthcheck.py"]
-ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/see-through-entrypoint"]
+ENTRYPOINT ["/usr/bin/tini", "-s", "-g", "--", "/usr/local/bin/see-through-entrypoint"]
 
 # Each large binary family is installed in its own bounded layer. --no-deps is
 # deliberate: the complete dependency set is explicitly represented here.
@@ -148,4 +156,4 @@ RUN ln -s common/assets /opt/see-through/assets \
 EXPOSE 22
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD ["/usr/local/libexec/see-through/healthcheck.py"]
-ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/see-through-entrypoint"]
+ENTRYPOINT ["/usr/bin/tini", "-s", "-g", "--", "/usr/local/bin/see-through-entrypoint"]

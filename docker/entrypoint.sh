@@ -2,9 +2,11 @@
 set -Eeuo pipefail
 
 readonly RUNTIME_DIR=/run/see-through
-readonly AUTHORIZED_KEYS="$RUNTIME_DIR/authorized_keys"
-readonly HOST_KEY="$RUNTIME_DIR/ssh_host_ed25519_key"
-readonly SSHD_CONFIG="$RUNTIME_DIR/sshd_config"
+readonly ROOT_SSH_DIR=/root/.ssh
+readonly AUTHORIZED_KEYS_SOURCE="$ROOT_SSH_DIR/authorized_keys"
+readonly AUTHORIZED_KEYS_RUNTIME="$RUNTIME_DIR/authorized_keys"
+readonly SSHD_RUNTIME_CONFIG=/etc/ssh/sshd_config.d/99-see-through-runtime.conf
+readonly SSHD_PID="$RUNTIME_DIR/sshd.pid"
 
 web_pid=""
 ssh_pid=""
@@ -52,21 +54,43 @@ safe_storage_path() {
     esac
 }
 
+log_ssh_host_key_fingerprints() {
+    local found=0
+    local fingerprint
+    local public_key
+    for public_key in /etc/ssh/ssh_host_*_key.pub; do
+        [[ -f "$public_key" ]] || continue
+        fingerprint="$(ssh-keygen -l -E sha256 -f "$public_key")" || {
+            printf 'Could not read SSH host-key fingerprint: %s\n' "$public_key" >&2
+            return 1
+        }
+        printf 'SSH host key %s fingerprint: %s\n' "$(basename "$public_key")" "$fingerprint"
+        found=1
+    done
+    if (( found == 0 )); then
+        printf 'SSH host-key generation produced no public keys.\n' >&2
+        return 1
+    fi
+}
+
 SEE_THROUGH_DATA_DIR="$(safe_storage_path "$SEE_THROUGH_DATA_DIR")"
 SEE_THROUGH_MODEL_CACHE="$(safe_storage_path "$SEE_THROUGH_MODEL_CACHE")"
 HF_HOME="$SEE_THROUGH_MODEL_CACHE"
 export SEE_THROUGH_DATA_DIR SEE_THROUGH_MODEL_CACHE HF_HOME
+export SEE_THROUGH_SSH_REQUIRED=0
 
 permit_open="$(/usr/local/libexec/see-through/listener_contract.py)"
 install -d -m 0750 -o seethrough -g seethrough "$SEE_THROUGH_DATA_DIR" "$SEE_THROUGH_MODEL_CACHE"
 install -d -m 0700 "$RUNTIME_DIR"
+install -d -m 0700 "$ROOT_SSH_DIR"
 install -d -m 0755 /run/sshd
 if [[ -e /opt/see-through/workspace && ! -L /opt/see-through/workspace ]]; then
     printf '/opt/see-through/workspace exists and is not a symlink; refusing to replace it.\n' >&2
     exit 64
 fi
 ln -sfn "$SEE_THROUGH_DATA_DIR" /opt/see-through/workspace
-rm -f "$AUTHORIZED_KEYS" "$HOST_KEY" "$HOST_KEY.pub" "$SSHD_CONFIG" "$RUNTIME_DIR/sshd.pid"
+rm -f "$AUTHORIZED_KEYS_RUNTIME" /etc/ssh/ssh_host_*_key /etc/ssh/ssh_host_*_key.pub \
+    "$SSHD_RUNTIME_CONFIG" "$SSHD_PID"
 /usr/local/libexec/see-through/write_runtime_env.py
 
 server_module="${SEE_THROUGH_SERVER_MODULE:-seethrough_server}"
@@ -83,60 +107,30 @@ setsid setpriv --reuid=seethrough --regid=seethrough --init-groups --reset-env \
 web_pid=$!
 
 key_status=0
-/usr/local/libexec/see-through/validate_authorized_keys.py "$AUTHORIZED_KEYS" || key_status=$?
+/usr/local/libexec/see-through/validate_authorized_keys.py \
+    "$AUTHORIZED_KEYS_RUNTIME" "$AUTHORIZED_KEYS_SOURCE" || key_status=$?
 case "$key_status" in
     0)
-        ssh-keygen -q -t ed25519 -N '' -f "$HOST_KEY"
-        chmod 0600 "$HOST_KEY"
-        cat >"$SSHD_CONFIG" <<EOF
+        cat >"$SSHD_RUNTIME_CONFIG" <<EOF
 Port 22
 AddressFamily any
-HostKey $HOST_KEY
-AuthorizedKeysFile $AUTHORIZED_KEYS
-StrictModes yes
-AuthenticationMethods publickey
-PubkeyAuthentication yes
-PasswordAuthentication no
-PermitEmptyPasswords no
-KbdInteractiveAuthentication no
-ChallengeResponseAuthentication no
-UsePAM no
-PermitRootLogin prohibit-password
-AllowUsers root
-AllowGroups root
-PermitUserEnvironment no
-AllowAgentForwarding no
-AllowTcpForwarding local
-AllowStreamLocalForwarding no
-GatewayPorts no
 PermitOpen $permit_open
-PermitListen none
-X11Forwarding no
-PermitTunnel no
-MaxAuthTries 3
-MaxSessions 4
-LoginGraceTime 30
-ClientAliveInterval 60
-ClientAliveCountMax 3
-TCPKeepAlive no
-LogLevel VERBOSE
-PrintMotd no
-PrintLastLog no
-PidFile $RUNTIME_DIR/sshd.pid
-Subsystem sftp internal-sftp
+PidFile $SSHD_PID
 EOF
-        /usr/sbin/sshd -t -f "$SSHD_CONFIG"
+        ssh-keygen -A
+        /usr/sbin/sshd -t
+        export SEE_THROUGH_SSH_REQUIRED=1
+        /usr/local/libexec/see-through/write_runtime_env.py
         printf 'SSH enabled: root public-key authentication only; permitted local-forward destination %s\n' "$permit_open"
-        printf 'SSH host key fingerprint (verify in RunPod Container Logs): '
-        ssh-keygen -l -E sha256 -f "$HOST_KEY.pub"
-        setsid env -u PUBLIC_KEY -u SSH_PUBLIC_KEY /usr/sbin/sshd -D -e -f "$SSHD_CONFIG" &
+        log_ssh_host_key_fingerprints
+        setsid env -u PUBLIC_KEY -u SSH_PUBLIC_KEY /usr/sbin/sshd -D -e &
         ssh_pid=$!
         ;;
     2)
         printf 'SSH remains disabled because the supplied key set was rejected.\n' >&2
         ;;
     3)
-        printf 'SSH disabled: neither PUBLIC_KEY nor SSH_PUBLIC_KEY contains a key.\n'
+        printf 'SSH disabled: no key found in SSH_PUBLIC_KEY, /root/.ssh/authorized_keys, or PUBLIC_KEY.\n'
         ;;
     *)
         printf 'SSH key validation failed unexpectedly (status %s); SSH remains disabled.\n' "$key_status" >&2

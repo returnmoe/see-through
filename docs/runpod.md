@@ -31,10 +31,13 @@ documents that injection. You can instead put the public key in the template as
 either `PUBLIC_KEY` or `SSH_PUBLIC_KEY`; RunPod documents `SSH_PUBLIC_KEY` as the
 [per-Pod override](https://docs.runpod.io/pods/configuration/use-ssh#override-your-public-key-for-a-specific-pod).
 
-Both variables may contain multiple newline-separated public keys. When both
-are set, the image combines and deduplicates them. If any supplied line is not
-a valid public key, SSH remains disabled; a partial key set is never accepted.
-The image does not print the submitted key material.
+Each source may contain multiple newline-separated public keys. The image uses
+exactly one source with Miru-compatible precedence: `SSH_PUBLIC_KEY` first as
+the per-Pod override, then `/root/.ssh/authorized_keys`, then `PUBLIC_KEY`.
+It validates and deduplicates the selected source. If any selected line is not
+a valid public key, SSH remains disabled rather than falling back to another
+source or accepting a partial key set. The image does not print the submitted
+key material.
 
 ## 2. Create the RunPod template
 
@@ -109,13 +112,26 @@ before running a job.
 
 ## 3. Verify the SSH host key
 
-Every container start generates a new Ed25519 SSH host key. Open the Pod's
-**Logs → Container Logs** view (sometimes described as the web serial console)
-and find the line containing the SHA-256 SSH host-key fingerprint.
+Every container start uses OpenSSH's standard `ssh-keygen -A` behavior to
+generate RSA, ECDSA, and Ed25519 host keys under `/etc/ssh`. The image accepts
+`PUBLIC_KEY`, `SSH_PUBLIC_KEY`, and a RunPod-populated
+`/root/.ssh/authorized_keys` file, using the precedence documented above. It
+validates the selected source, then writes a controlled copy to
+`/run/see-through/authorized_keys` for
+`StrictModes`; the PID file and non-secret runtime environment also remain
+under `/run`. Open the Pod's **Logs → Container Logs** view (sometimes
+described as the web serial console) and find the SHA-256 fingerprints logged
+for every generated host key.
 
-Do not accept the first SSH connection until the `SHA256:...` value in the SSH
-prompt exactly matches the value in the RunPod log. This protects the initial
-connection from connecting to the wrong endpoint.
+When SSH is enabled successfully, the container health check also verifies its
+loopback listener. If SSH later disappears, the Pod becomes unhealthy instead
+of continuing to report only the web service as healthy.
+
+Do not accept the first SSH connection until the key type and `SHA256:...`
+value in the SSH prompt exactly match the corresponding value in the RunPod
+log. The client normally selects Ed25519, while RSA and ECDSA retain
+compatibility with other SSH clients and security policies. This verification
+protects the initial connection from reaching the wrong endpoint.
 
 RunPod maps container port 22 to an external TCP port. Its
 [full-SSH instructions](https://docs.runpod.io/pods/configuration/use-ssh#full-ssh-via-public-ip-with-key-authentication)
@@ -273,7 +289,8 @@ verify:
 
 - the image pulls and starts successfully;
 - only the configured TCP ports are reachable;
-- `PUBLIC_KEY`, `SSH_PUBLIC_KEY`, and the combined case authenticate correctly;
+- `PUBLIC_KEY`, `SSH_PUBLIC_KEY`, and mounted-file fallback authenticate correctly;
+- `SSH_PUBLIC_KEY` overrides both other sources when it is set;
 - the logged fingerprint matches the live server and changes on a fresh start;
 - default model downloads use local container storage;
 - optional `/workspace` overrides use the requested paths;
